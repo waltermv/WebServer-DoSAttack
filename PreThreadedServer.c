@@ -71,6 +71,13 @@ Para ejecutar el programa:
                        "Content-type: text/html\r\n\r\n"\
                        "<P>Error prohibited execution.\r\n"
 
+#define CANNOT_ALTER "HTTP/1.1 409 Conflict\r\n"\
+                     SERVER_STRING\
+                     "Content-type: text/html\r\n\r\n"\
+                     "<P>The request could not be completed"\
+                     "due to conflict with the current state"\
+                     "of the target resource.\r\n"
+
 // Respuesta HTTP de código 503
 #define FULL_QUEUE "HTTP/1.1 503 Service Unavailable\r\n"\
                     SERVER_STRING\
@@ -79,6 +86,8 @@ Para ejecutar el programa:
                    "<HEAD><meta http-equiv=\"refresh\" content=\"15\"></HEAD>"\
                    "<BODY><P>Server currently unavailable due to overload."\
                    "</BODY></HTML>\r\n"
+
+#define FILE_RIGHTS S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH
 
 // Estructura de datos que le indica al servidor cual tipo "mime" pertenece a cierta extensión.
 struct {
@@ -133,6 +142,7 @@ void send_file(int client, const char *path, int length);       // Función para
 void execute_file(int client, const char *path,                 // Utilizada para ejecutar un binario y enviarle
          const char *method, const char *query_string);         // la respuesta al cliente.
 void *handle_connection(int *pclient);                          // Función que maneja la conexión con el cliente.
+void delete_file(int client, const char *path);
 
 // Método para colocar un elemento en la lista.
 void enqueue(int *client_socket) {
@@ -178,7 +188,7 @@ void *thread_function(void *arg) {
 
 // Función para obtener una línea de un socket. Para hasta que encuentra una nueva línea, retorno de carro o
 // avance de línea. Retorna el número de bytes almacenados.
-int get_line(int sock, char *buf, int size) {
+int get_line(int sock, char *buff, int size) {
     int i = 0;
     char c = '\0';
     int n;
@@ -193,13 +203,13 @@ int get_line(int sock, char *buf, int size) {
                 else
                     c = '\n';
             }
-            buf[i] = c;     // Se almacena el caracter en el buffer.
+            buff[i] = c;     // Se almacena el caracter en el buffer.
             i++;
         } else {
             c = '\n';       // Se le asigna el valor de la nueva línea para terminar las iteraciones.
         }
     }
-    buf[i] = '\0';          // Se añade el valor nulo a la cadena.
+    buff[i] = '\0';          // Se añade el valor nulo a la cadena.
 
     return i;
 }
@@ -321,12 +331,14 @@ void execute_file(int client, const char *path,
         if (strcasecmp(method, "POST") == 0) {          // Si el método es un "Post".
             for (i = 0; i < content_length; i++) {      // Se coloca en la tubería "input" los parámetros
                 recv(client, &c, 1, 0);                 // del programa a ejecutar.
+                fprintf(stdout, "%c", c);
                 write(cgi_input[1], &c, 1);
             }
         }
 
-        sprintf(buff, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n");    // Se escribe el encabezado de la
-                                                                                // respuesta.
+        sprintf(buff, "HTTP/1.1 200 OK\r\n%sContent-Type: text/html\r\n\r\n",   // Se escribe el encabezado de la
+                SERVER_STRING);                                                 // respuesta
+
         fprintf(stdout, "Encabezado de la respuesta:\n%s\n", buff);
 
         send(client, buff, strlen(buff), 0);        // Se envía el encabezado al cliente.
@@ -341,6 +353,100 @@ void execute_file(int client, const char *path,
     }
 }
 
+void delete_file(int client, const char *path) {
+    char buff[MAXLINE];
+    int length = strlen(path);
+    if(length >= 10 && !strcmp(path+length-10, "index.html")) {
+        fprintf(stdout, "El archivo no se puede borrar\n");
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);  // Si el archivo no se puede borrar se le indica
+        return;                                                 // al cliente.
+    }
+    if(length >= 11 && !strcmp(path+length-11, "favicon.ico")) {
+        fprintf(stdout, "El archivo no se puede borrar\n");
+       	send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);
+        return;
+    }
+
+    if(remove(path) < 0) {
+        fprintf(stdout, "El archivo no se puede borrar\n");
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);
+    }
+    else {
+        sprintf(buff, "HTTP/1.1 204 No Content\r\n%s\r\n", SERVER_STRING);  // Se escribe el encabezado de la
+                                                                            // respuesta.
+        fprintf(stdout, "Encabezado de la respuesta:\n%s\n", buff);
+        send(client, buff, strlen(buff), 0);        // Se envía el encabezado al cliente.
+    }
+}
+
+void copy_content(int client, char *filename) {
+    char buff[MAXLINE];
+    int numChars = 1;
+    int content_length = -1;
+    int buff_len;
+    int nb_elements_read;
+    int nb_elements_write;
+    int status; // 0 Error, 1 Crear y 2 Actualizar
+    int fd_out;
+
+    if((fd_out = open(filename, O_EXCL | O_WRONLY | O_CREAT | O_TRUNC, FILE_RIGHTS)) == -1) {
+        fprintf(stdout, "El archivo ya existe\n");
+        status = 2;
+        if ((fd_out = creat(filename, FILE_RIGHTS)) == -1) {
+            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser actualizado.
+            fprintf(stdout, "El archivo no se puede sobreescribir\n");
+            return;
+        }
+    }
+    else {
+        status = 1;
+    }
+
+    numChars = get_line(client, buff, sizeof(buff));
+    while ((numChars > 0) && strcmp("\n", buff)) {
+        buff[15] = '\0';
+        if (strcasecmp(buff, "Content-Length:") == 0)       // Se obtiene el largo del cuerpo de la solicitud.
+            content_length = atoi(&(buff[16]));
+        numChars = get_line(client, buff, sizeof(buff));    // Se descartan datos innecesarios.
+    }
+    if (content_length == -1) {                             // Si el largo del contenido es -1 se le envía
+        send(client, BAD_REQUEST, sizeof(BAD_REQUEST), 0);  // un mensaje de error al cliente.
+        return;
+    }
+
+    buff_len = MAXLINE;
+
+    while (content_length) {//status &&
+        if (content_length < MAXLINE)
+	        buff_len = content_length;
+        nb_elements_read = read(client, buff, buff_len);
+        if (nb_elements_read == -1) {
+            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser creado.
+            fprintf(stdout, "El archivo no se puede crear\n");
+            return;
+        }
+
+        nb_elements_write = write (fd_out, buff, nb_elements_read);
+        if (nb_elements_write == -1 || nb_elements_write != nb_elements_read) {
+            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser creado.
+            fprintf(stdout, "El archivo no se puede crear\n");
+            return;
+        }
+        content_length -= nb_elements_read;
+    }
+
+    if (close (fd_out) == -1) {
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser creado.
+        fprintf(stdout, "El archivo no se puede crear\n");
+        return;
+    }
+
+    sprintf(buff, "HTTP/1.1 204 No Content\r\n%s\r\n", SERVER_STRING);  // Se escribe el encabezado de la
+                                                                        // respuesta.
+    fprintf(stdout, "Encabezado de la respuesta:\n%s\n", buff);
+    send(client, buff, strlen(buff), 0);                                // Se envía el encabezado al cliente.
+}
+
 // Función que maneja la conexión con el cliente.
 void *handle_connection(int *pclient) {
 	int client = *pclient;
@@ -353,15 +459,15 @@ void *handle_connection(int *pclient) {
 	size_t i=0, j=0;            // Enteros sin signo para iterar.
 	char *queryString;          // Almacenará los parámetros para ejecutar un binario.
 	int execute = 0;            // Indica si el archivo es ejecutable.
-	struct stat st; //Información del archivo
+	struct stat st;             // Información del archivo.
 
 	fprintf(stdout, "\nAtendiendo al cliente: %d\n", client);
 
 	numChars = get_line(client, buff, MAXLINE);     // Se obtiene el método de la solicitud.
 
 	if(!strcmp(buff, "\0")) {   // Si la solicitud es vacía se cierra la conexión.
-		fprintf(stdout, "\nCerrando la conexión con: %d\n", client);
-		close(client);
+		fprintf(stdout, "Cerrando la conexión con: %d\n", client);
+	    close(client);                  // Se cierra el socket del cliente.
 		return NULL;
 	}
 
@@ -372,13 +478,16 @@ void *handle_connection(int *pclient) {
 	method[i] = '\0';
 
 	// Se comprueba si la solicitud corresponde a métodos implementados.
-	if (strcasecmp(method, "GET") && strcasecmp(method, "POST")) {
-        	send(client, UNIMPLEMENTED, strlen(UNIMPLEMENTED), 0);  // Si no han sido implementados se envía
-        	return NULL;                                            // un mensaje de error al cliente.
-    	}
+	/*if (strcasecmp(method, "GET") && strcasecmp(method, "POST") && strcasecmp(method, "DELETE")) {
+	    fprintf(stdout, "Método no implementado\n");
+       	send(client, UNIMPLEMENTED, strlen(UNIMPLEMENTED), 0);          // Si no han sido implementados se envía
+       	fprintf(stdout, "Cerrando la conexión con: %d\n", client);      // un mensaje de error al cliente.
+	    close(client);                              // Se cierra el socket del cliente.
+       	return NULL;
+    }*/
 
-	if (strcasecmp(method, "POST") == 0)        // Si es un "Post" es porque se ejecutará un binario.
-        	execute = 1;
+	if (!strcasecmp(method, "POST"))        // Si es un "Post" es porque se ejecutará un binario.
+        execute = 1;
 
 	//Recuperamos la URL especificada por el usuario.
 	i = 0;
@@ -390,41 +499,50 @@ void *handle_connection(int *pclient) {
    	URL[i] = '\0';
 
 	//Comprobamos si tiene parámetros en la URL
-	if (strcmp(method, "GET") == 0) {       // Esto solo se encontrará en un "Get".
+	if (!strcmp(method, "GET")) {       // Esto solo se encontrará en un "Get".
 		queryString = URL;
-        	while ((*queryString != '?') && (*queryString != '\0'))     // Se busca un "?".
-			    queryString++;
-        	if (*queryString == '?') {
-			    execute = 1;
-			    *queryString = '\0';        // Se cambia el "?" de la URL por un caracter nulo.
-			    queryString++;              // Lo que le sigue serán los parámetros del binario.
-        	}
-    	}
+       	while ((*queryString != '?') && (*queryString != '\0'))     // Se busca un "?".
+		    queryString++;
+       	if (*queryString == '?') {
+		    execute = 1;
+		    *queryString = '\0';        // Se cambia el "?" de la URL por un caracter nulo.
+		    queryString++;              // Lo que le sigue serán los parámetros del binario.
+        }
+    }
 
 	sprintf(path, "%s%s", root_path, URL);  // Se le añade a la URL la ruta a donde buscar.
 
 	// Si nos piden un directorio le damos el index.html del directorio.
-	if (path[strlen(path) - 1] == '/')
+	if (strcmp(method, "PUT") && path[strlen(path) - 1] == '/')
         	strcat(path, "index.html");
 	
-	if (stat(path, &st) == -1) {    // Si no encontramos el archivo.
+	if (strcmp(method, "PUT") && stat(path, &st) == -1) {   // Si no encontramos el archivo.
         while ((numChars > 0) && strcmp("\n", buff))        // Se leen y se descartan los datos del encabezado.
             numChars = get_line(client, buff, sizeof(buff));
+
 		fprintf(stderr, "Archivo no encontrado.\n");
         send(client, NOT_FOUND, strlen(NOT_FOUND), 0);      // Se envía al cliente un error.
-	} 
-	else {                          // Si lo encontramos
-        if ((st.st_mode & S_IXUSR) ||       // Se comprueba si el archivo es ejecutable para cualquier usuario.
+	}
+	else {                                  // Si lo encontramos
+        if (strcmp(method, "PUT") &&
+                (st.st_mode & S_IXUSR) ||       // Se comprueba si el archivo es ejecutable para cualquier usuario.
         	    (st.st_mode & S_IXGRP) ||
-          	    (st.st_mode & S_IXOTH))
-           	execute = 1;            // Se marca el archivo como ejecutable.
-        if (!execute)               // Si no es ejecutable se envía el archivo normalmente.
-        		send_file(client, path, st.st_size);
-        else                        // Si es ejecutable se envía a la función para procesarlo.
+          	    (st.st_mode & S_IXOTH)) {
+           	execute = 1;                    // Se marca el archivo como ejecutable.
+        }
+        if(!strcmp(method, "PUT")) {
+            copy_content(client, path);
+        }
+        else if (!strcmp(method, "DELETE")) {
+            delete_file(client, path);
+        }
+        else if (!execute)                  // Si no es ejecutable se envía el archivo normalmente.
+        	send_file(client, path, st.st_size);
+        else                                // Si es ejecutable se envía a la función para procesarlo.
         	execute_file(client, path, method, queryString);
 	}
 	fprintf(stdout, "Cerrando la conexión con: %d\n", client);
-	close(client);                  // Se cierra el socket del cliente.
+	close(client);                          // Se cierra el socket del cliente.
 	return NULL;
 }
 
