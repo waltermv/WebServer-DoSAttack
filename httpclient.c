@@ -1,8 +1,23 @@
+/*
+Autores:
+Brandon Ledezma Fernández
+Walter Morales Vásquez
+
+Cliente HTTP capaz de realizar colsultas a un servidor, mediante los metodos de GET, POST, DELETE y PUT.
+
+Para compilar el programa es necesario un ambiente GNU/Linux:
+    gcc httpclient.c  -o httpclient
+
+Para ejecutar el programa:
+    ./PreThreadedServer -p puerto -w dirección-carpeta-raíz -n cantidad-hilos
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netdb.h>
 #include <string.h>
 #include <unistd.h>
@@ -235,6 +250,64 @@ void deleteMethod(int client, char *url, char *host) {
 
 
 /***
+ * Funcion para enviar archivos al servidor
+ * @param file Puntero del archivo que se va a enviar al servidor
+ * @param client Valor obtenido de la conexion del socket
+ */
+void sendFile(FILE *file, int client){
+    char bufferRequest[BUFFER_LEN];
+    memset(bufferRequest, 0x00, BUFFER_LEN);
+    while(fgets(bufferRequest, BUFFER_LEN, file) != NULL) {
+        printf("%s", bufferRequest);
+        if (send(client, bufferRequest, sizeof(bufferRequest), 0) != -1) { // Se lee los valores del archivo y se envian hasta obtener un valor -1
+            perror("[Error in sending file]"); // En tal caso se informa el error
+            exit(1); // Se termina la ejecucion
+        }
+        bzero(bufferRequest, BUFFER_LEN); // Se limpia el buffer
+    }
+}
+
+
+/***
+ * Funcion para obtener el largo de un archivo
+ * @param filename Nombre del archivo que desea conocer el largo
+ * @return largo del archivo
+ */
+long getFileSize(const char *filename){
+    struct stat statbuf;
+    if (stat(filename, &statbuf) == -1){
+        perror("[failed to stat file]\n");
+        exit(1);
+    }
+    return statbuf.st_size;
+}
+
+
+/***
+ * Funcion para realizar un consulta PUT a un servidor
+ * @param client valor obtenido del socket
+ * @param url lugar donde se envia el recurso
+ * @param host servidor donde se aloja el recurso
+ * @param fileName
+ */
+void putMethod(int client, char *url, char *host, char *fileName){
+    long size = getFileSize(fileName);
+    FILE *file = fopen(fileName, "r");
+    if(file == NULL) {
+        perror("[Error reading file]");
+        exit(1);
+    }
+    char requestBuffer[1080]; // buffer para almacenar el request
+    sprintf(requestBuffer,"PUT %s HTTP/1.1 %sHost: %s%sContent-Length: %ld%s%s",url, CRLF, host, CRLF, size + 1, CRLF, CRLF);
+    printf(requestBuffer,"PUT %s HTTP/1.1 %sHost: %s%sContent-Length: %ld%s%s",url, CRLF, host, CRLF, size + 1, CRLF, CRLF);
+    send(client, requestBuffer, strlen(requestBuffer), 0); // se enviar la consulta al cliente
+    sendFile(file, client);
+    if (fclose(file)!=0) perror("[The file could not be closed]");
+    readResponse(client); // se lee los encabezados del response
+}
+
+
+/***
  * Funcion principal del programa, recibe como parametros los argumentos de la terminal
  * @param argc como la cantidad de argumentos
  * @param args como los string recibidos
@@ -246,8 +319,9 @@ int main(int argc, char *args[]) {
     port = getPort(host); // Obtenemos el puerto, si es que viene en la dirección
     int socket = getConnection(host, port); // Se abre un socket para la conexión con el servidor.
     if(argc == 3) getMethod(socket, path); // Se comprueba si la consulta es un GET
-    else if (strcmp(args[3], "POST") == 0) postMethod(socket, path, host, args[4]); // Se comprueba si la consulta es un GET
-    else if (strcmp(args[3], "DELETE") == 0) deleteMethod(socket, path, host);
+    else if (strcmp(args[3], "POST") == 0) postMethod(socket, path, host, args[4]); // Se comprueba si la consulta es un POST
+    else if (strcmp(args[3], "DELETE") == 0) deleteMethod(socket, path, host);  // Se comprueba si la consulta es un DELETE
+    else if (strcmp(args[3], "PUT") == 0) putMethod(socket, path, host, args[4]); // Se comprueba si la consulta es un PUT
     else printf("[Method not supported]\n");
     close(socket); // Se cierra el socket de la conexion
     return 0; // Indica que se termino con exito

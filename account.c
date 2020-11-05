@@ -12,11 +12,11 @@ struct {
     char *number;
     char *code;
 } accounts[] = {
-    {"juan", "password","Juan", "Perez", "CR05012602001026284066", "3166"},
-    {"maria", "password","Maria", "Castillo", "CR05012308601026284066", "4248"},
-    {"ana", "password","Analia", "Rodriguez", "CR05012808601026214056", "8652"},
-    {"ale", "password","Alejandro", "Castro", "CR05012806401026214056", "8652"},
-    {0,0,0,0,0,0,}
+        {"juan", "password","Juan", "Perez", "CR05012602001026284066", "3166"},
+        {"maria", "password","Maria", "Castillo", "CR05012308601026284066", "4248"},
+        {"ana", "password","Analia", "Rodriguez", "CR05012808601026214056", "8652"},
+        {"ale", "password","Alejandro", "Castro", "CR05012806401026214056", "8652"},
+        {0,0,0,0,0,0,}
 };
 struct data {
     char *username;
@@ -86,7 +86,6 @@ int main(int argc, char **argv)
     rest = login.password;
     token = strtok_r(rest, "=", &rest);
     login.password = rest;
-    //printf("~~~~~%s esto %s",login.username, login.password)
     puts("<!DOCTYPE html>");
     puts("<head>");
     puts("  <meta charset=\"utf-8\">");

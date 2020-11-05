@@ -1,3 +1,32 @@
+"""
+Autores:
+Brandon Ledezma Fernández
+Walter Morales Vásquez
+
+Cliente HTTP capaz de realizar colsultas a un servidor, mediante los metodos de GET, POST, DELETE y PUT.
+
+Para ejecutar el programa:
+
+    GET: python3 httpclient.py -u [direccion del recurso]
+
+Donde direccion del recurso significa la ubicacion del servidor con la ruta en especifico del recurso.
+
+    POST: python3 httpclient.py -u [direccion del recurso] POST param1:value1,param2:value2
+
+Donde direccion del recurso significa la ubicacion del servidor con la ruta en especifico del recurso y los
+campos param y value los parametros que se desean enviar, se pueden enviar varios dividiendolos por coma [,].
+
+    PUT: python3 httpclient.py -u [direccion del recurso] PUT [recurso]
+
+Donde direccion del recurso significa la ubicacion del servidor con la ruta en especifico del recurso el nombre del
+recurso que desea enviar.
+
+    DELETE: python3 httpclient.py -u [direccion del recurso] DELETE
+
+Donde direccion del recurso significa la ubicacion del servidor con la ruta en especifico del recurso que se desea
+eliminar.
+"""
+import os
 import sys
 from io import BytesIO
 import pycurl
@@ -42,10 +71,12 @@ def postRequest(url, data):
 def putMethod(url, fileName):
     buffer = BytesIO()
     curl = pycurl.Curl()  # Se establece la conexion utilizando curl
+    length = os.stat(fileName).st_size
     curl.setopt(curl.URL, url)
-    curl.setopt(curl.UPLOAD, 1)
+    curl.setopt(pycurl.PUT, 1)
+    curl.setopt(pycurl.INFILESIZE, length) # Se asigna el largo del contenido
     file = open(fileName)  # Se abre el archivo a colocar
-    curl.setopt(curl.READDATA, file)  # Se agrega el archivo
+    curl.setopt(curl.READDATA, file) # Se agrega el archivo
     curl.setopt(pycurl.HEADERFUNCTION, buffer.write)  # Se lee el encabezado
     curl.perform()
     header = buffer.getvalue().splitlines()
@@ -90,6 +121,8 @@ def createRequest(method, url, args):
 
 # Funcion principal del cliente, se leen los parametros obtenidos de consola
 def main(args):
+    if len(args) < 2:
+        exit("Invalid parameters")
     url = args[2]
     if not ("http://" in url):  # Se agrega el prefijo al URL sino lo posee
         url = "http://" + url
