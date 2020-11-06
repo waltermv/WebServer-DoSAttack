@@ -171,7 +171,7 @@ void send_file(int client, const char *path, int length) {
     while ((numChars > 0) && strcmp("\n", buff))        // Se leen y se descartan los encabezados de la solicitud.
         numChars = get_line(client, buff, MAXLINE);
 
-    int resource = open(path, O_RDONLY);
+    resource = open(path, O_RDONLY);
     if (resource == -1) {
         send(client, NOT_FOUND, strlen(NOT_FOUND), 0);  // Si no se encuentra se le envía un error 404 al cliente.
     }
