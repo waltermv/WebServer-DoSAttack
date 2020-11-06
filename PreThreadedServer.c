@@ -4,7 +4,7 @@ Brandon Ledezma Fernández
 Walter Morales Vásquez
 
 Servidor capaz de atender a usuarios utilizando la técnica de Pre-Thread. Actualmente acepta solicitudes
-de GET y POST. Además, es capaz de ejecutar archivos binarios que dan como resultado texto html.
+de GET, POST, DELETE y PUT. Además, es capaz de ejecutar archivos binarios que dan como resultado texto html.
 
 Para compilar el programa:
 gcc -o PreThreadedServer PreThreadedServer.c -pthread
@@ -55,22 +55,13 @@ Para ejecutar el programa:
                   "is unavailable or nonexistent."\
                   "</BODY></HTML>\r\n"
 
-// Respuesta HTTP de código 501
-#define UNIMPLEMENTED "HTTP/1.1 501 Method Not Implemented\r\n"\
-                      SERVER_STRING\
-                      "Content-Type: text/html\r\n"\
-                      "\r\n"\
-                      "<HTML><HEAD><TITLE>Method Not Implemented\r\n"\
-                      "</TITLE></HEAD>\r\n"\
-                      "<BODY><P>HTTP request method not supported.\r\n"\
-                      "</BODY></HTML>\r\n"
-
 // Respuesta HTTP de código 500
 #define CANNOT_EXECUTE "HTTP/1.1 500 Internal Server Error\r\n"\
                         SERVER_STRING\
                        "Content-type: text/html\r\n\r\n"\
                        "<P>Error prohibited execution.\r\n"
 
+// Respuesta HTTP de código 409
 #define CANNOT_ALTER "HTTP/1.1 409 Conflict\r\n"\
                      SERVER_STRING\
                      "Content-type: text/html\r\n\r\n"\
@@ -87,6 +78,7 @@ Para ejecutar el programa:
                    "<BODY><P>Server currently unavailable due to overload."\
                    "</BODY></HTML>\r\n"
 
+// Con lo que se comprobará si el usuario tiene los permisos para actualizar un archivo.
 #define FILE_RIGHTS S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH
 
 // Estructura de datos que le indica al servidor cual tipo "mime" pertenece a cierta extensión.
@@ -117,6 +109,8 @@ extensions[] = {
 
 // Dirección de la carpeta donde se comenzarán a recuperar los recursos.
 char *root_path = "\0";
+// Donde se almacena el puerto a utilizar.
+int port = 0;
 
 // Lista enlazada FIFO que almacena los clientes a atender.
 typedef struct node {
@@ -126,6 +120,8 @@ typedef struct node {
 
 node_thread *node_head = NULL;      // Nodo cabeza de la lista enlazada.
 node_thread *node_tail = NULL;      // Nodo cola de la lista enlazada.
+
+int max_threads = 0;                // Maxima cantidad de hilos a manejar.
 int queue_quantity = 1;             // Cantidad de elementos de la lista.
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;          // Mutex que se utilizará para bloquear y
@@ -142,7 +138,18 @@ void send_file(int client, const char *path, int length);       // Función para
 void execute_file(int client, const char *path,                 // Utilizada para ejecutar un binario y enviarle
          const char *method, const char *query_string);         // la respuesta al cliente.
 void *handle_connection(int *pclient);                          // Función que maneja la conexión con el cliente.
-void delete_file(int client, const char *path);
+void delete_file(int client, const char *path);                 // Función para eliminar el archivo especificado.
+void copy_content(int client, char *path);                      // Función para copiar el contenido del cuerpo de
+                                                                // una solicitud PUT en el servidor.
+void doNothing(int client);                                     // Función por la que pasarán las conexiones de los
+                                                                // protocolos que no sean HTTP una vez muestren su mensaje.
+void attendIncomingFtpRequest(int client, int pActiveProcess, int pProcessMax);
+                                                                // Función para atender una conexión FTP.
+void attendIncomingSNMPRequest(int client);                      // Función para atender una conexión SNMP.
+void attendIncomingTelnetRequest(int client);                   // Función para atender una conexión Telnet.
+void attendIncomingSMTPRequest(int client);                     // Función para atender una conexión SMTP.
+void attendIncomingDNSRequest(int client);                      // Función para atender una conexión DNS.
+void attendIncomingSSHRequest(int client);                      // Función para atender una conexión SSH.
 
 // Método para colocar un elemento en la lista.
 void enqueue(int *client_socket) {
@@ -181,7 +188,21 @@ void *thread_function(void *arg) {
         }                                               // trabajar.
         pthread_mutex_unlock(&mutex);                   // Se desbloquea el mutex.
 
-        handle_connection(pclient);                     // Se atiende la conexión.
+        // Se atiende la conexión con el protocolo FTP.
+        if(port == 21) attendIncomingFtpRequest(*pclient, queue_quantity, max_threads);
+
+        else if(port == 22) attendIncomingSSHRequest(*pclient);    // Se atiende la conexión con el protocolo SSH.
+
+        else if(port == 23) attendIncomingTelnetRequest(*pclient); // Se atiende la conexión con el protocolo Telnet.
+
+        else if(port == 25) attendIncomingSMTPRequest(*pclient);   // Se atiende la conexión con el protocolo SMTP.
+
+        else if(port == 53) attendIncomingDNSRequest(*pclient);    // Se atiende la conexión con el protocolo DNS.
+
+        else if(port == 161) attendIncomingSNMPRequest(*pclient);  // Se atiende la conexión con el protocolo SNMP.
+
+        else handle_connection(pclient);                // Se atiende la conexión con el protocolo HTTP.
+
         queue_quantity--;                               // Se disminuye en la cantidad de la cola.
     }
 }
@@ -353,25 +374,26 @@ void execute_file(int client, const char *path,
     }
 }
 
+// Función para eliminar el archivo especificado en el path.
 void delete_file(int client, const char *path) {
     char buff[MAXLINE];
     int length = strlen(path);
-    if(length >= 10 && !strcmp(path+length-10, "index.html")) {
-        fprintf(stdout, "El archivo no se puede borrar\n");
-        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);  // Si el archivo no se puede borrar se le indica
+    if(length >= 10 && !strcmp(path+length-10, "index.html")) { // Se comprueba si se desea eliminar un index.html.
+        fprintf(stderr, "El archivo no se puede borrar\n");
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);    // Si el archivo no se puede borrar se le indica
         return;                                                 // al cliente.
     }
-    if(length >= 11 && !strcmp(path+length-11, "favicon.ico")) {
-        fprintf(stdout, "El archivo no se puede borrar\n");
+    if(length >= 11 && !strcmp(path+length-11, "favicon.ico")) {// Se comprueba si el archivo es el favicon.ico.
+        fprintf(stderr, "El archivo no se puede borrar\n");
        	send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);
         return;
     }
 
-    if(remove(path) < 0) {
-        fprintf(stdout, "El archivo no se puede borrar\n");
-        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);
+    if(remove(path) < 0) {                                      // Se utiliza el comando remove.
+        fprintf(stderr, "El archivo no se pudo borrar\n");
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);    // Si no se pudo borrar se le indica al usuario.
     }
-    else {
+    else {                                                      // Si se logró borrar.
         sprintf(buff, "HTTP/1.1 204 No Content\r\n%s\r\n", SERVER_STRING);  // Se escribe el encabezado de la
                                                                             // respuesta.
         fprintf(stdout, "Encabezado de la respuesta:\n%s\n", buff);
@@ -379,27 +401,29 @@ void delete_file(int client, const char *path) {
     }
 }
 
-void copy_content(int client, char *filename) {
+// Función para copiar el contenido en la solicitud PUT en el servidor.
+void copy_content(int client, char *path) {
     char buff[MAXLINE];
     int numChars = 1;
-    int content_length = -1;
+    int content_length = -1;        // Largo indicado en el header de la solicitud.
     int buff_len;
-    int nb_elements_read;
-    int nb_elements_write;
-    int status; // 0 Error, 1 Crear y 2 Actualizar
-    int fd_out;
+    int nb_elements_read;           // Cantidad de elementos a leer.
+    int nb_elements_write;          // Cantidad de elementos a escribir.
+    int fd_out;                     // Referencia al archivo.
 
-    if((fd_out = open(filename, O_EXCL | O_WRONLY | O_CREAT | O_TRUNC, FILE_RIGHTS)) == -1) {
-        fprintf(stdout, "El archivo ya existe\n");
-        status = 2;
-        if ((fd_out = creat(filename, FILE_RIGHTS)) == -1) {
-            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser actualizado.
-            fprintf(stdout, "El archivo no se puede sobreescribir\n");
-            return;
-        }
+    if(path[strlen(path) - 1] == '/') {                                     // Se comprueba si lo que se quiere
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);                // modificar es un directorio.
+        fprintf(stderr, "El archivo especificado es un directorio\n");
+        return;
     }
-    else {
-        status = 1;
+
+    if((fd_out = open(path, O_EXCL | O_WRONLY | O_CREAT | O_TRUNC, FILE_RIGHTS)) == -1) {   // Se comprueba
+        fprintf(stdout, "El archivo ya existe\n");                                          // si ya existe.
+        if ((fd_out = creat(path, FILE_RIGHTS)) == -1) {                // Si no se tienen los permisos
+            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);            // necesarios para realizar la
+            fprintf(stderr, "El archivo no se puede sobreescribir\n");      // actualización se le indica al
+            return;                                                         // cliente.
+        }
     }
 
     numChars = get_line(client, buff, sizeof(buff));
@@ -414,35 +438,35 @@ void copy_content(int client, char *filename) {
         return;
     }
 
-    buff_len = MAXLINE;
+    buff_len = MAXLINE;         // Cantidad por la que se leerá en cada iteración.
 
-    while (content_length) {//status &&
+    while (content_length) {
         if (content_length < MAXLINE)
-	        buff_len = content_length;
-        nb_elements_read = read(client, buff, buff_len);
+	        buff_len = content_length;                  // Si el restante es menor a la cantidad máxima del buffer
+        nb_elements_read = read(client, buff, buff_len);// se utiliza la cantidad restante a leer para el espacio.
         if (nb_elements_read == -1) {
-            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser creado.
-            fprintf(stdout, "El archivo no se puede crear\n");
+            send(client, BAD_REQUEST, strlen(BAD_REQUEST), 0);    // Si sucede algún error al leer los datos
+            fprintf(stderr, "Error al leer el cuerpo de la solicitud\n");           // se le indica al usuario.
             return;
         }
 
         nb_elements_write = write (fd_out, buff, nb_elements_read);
-        if (nb_elements_write == -1 || nb_elements_write != nb_elements_read) {
-            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser creado.
-            fprintf(stdout, "El archivo no se puede crear\n");
+        if (nb_elements_write == -1 || nb_elements_write != nb_elements_read) { // Si sucede un error al crear
+            send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // el archivo se le indica al cliente.
+            fprintf(stderr, "El archivo no se puede crear\n");
             return;
         }
-        content_length -= nb_elements_read;
+        content_length -= nb_elements_read;         // Se le resta la cantidad leída a la restante.
     }
 
     if (close (fd_out) == -1) {
-        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);          // El archivo no puede ser creado.
-        fprintf(stdout, "El archivo no se puede crear\n");
+        send(client, CANNOT_ALTER, strlen(CANNOT_ALTER), 0);            // El archivo no se pudo cerrar.
+        fprintf(stderr, "Ocurrió un error con el archivo\n");
         return;
     }
 
     sprintf(buff, "HTTP/1.1 204 No Content\r\n%s\r\n", SERVER_STRING);  // Se escribe el encabezado de la
-                                                                        // respuesta.
+                                                                        // respuesta satisfactoria.
     fprintf(stdout, "Encabezado de la respuesta:\n%s\n", buff);
     send(client, buff, strlen(buff), 0);                                // Se envía el encabezado al cliente.
 }
@@ -476,15 +500,6 @@ void *handle_connection(int *pclient) {
 	while (!isspace(buff[i]) && (i < sizeof(method) - 1))           // Se itera hasta encontrar algo que no sea
 		method[i++] = buff[j++];                                    // espacios.
 	method[i] = '\0';
-
-	// Se comprueba si la solicitud corresponde a métodos implementados.
-	/*if (strcasecmp(method, "GET") && strcasecmp(method, "POST") && strcasecmp(method, "DELETE")) {
-	    fprintf(stdout, "Método no implementado\n");
-       	send(client, UNIMPLEMENTED, strlen(UNIMPLEMENTED), 0);          // Si no han sido implementados se envía
-       	fprintf(stdout, "Cerrando la conexión con: %d\n", client);      // un mensaje de error al cliente.
-	    close(client);                              // Se cierra el socket del cliente.
-       	return NULL;
-    }*/
 
 	if (!strcasecmp(method, "POST"))        // Si es un "Post" es porque se ejecutará un binario.
         execute = 1;
@@ -546,14 +561,102 @@ void *handle_connection(int *pclient) {
 	return NULL;
 }
 
+// Función por la que pasarán las conexiones de los protocolos que no sean HTTP una vez muestren su mensaje.
+void doNothing(int client) {
+	char c;
+	int valueAux;
+	do {
+		valueAux = recv(client, &c, 1, 0);          // Se recibirán datos hasta que en algún momento se
+	}while(valueAux != 0);                          // pierda la conexión.
+}
+
+// Función para atender una conexión FTP.
+void attendIncomingFtpRequest(int client, int pActiveProcess, int pProcessMax) {
+	char activeProcessStr[21];
+	char maxProcessStr[21];
+	fprintf(stdout, "Se ha detectado una conexión FTP.\n");
+	sprintf(activeProcessStr, "%d", pActiveProcess);
+	sprintf(maxProcessStr, "%d", pProcessMax);
+	char ftpResponse[85] = "220 FTP server ready, ";
+	strcat(ftpResponse, activeProcessStr);
+	strcat(ftpResponse, " active clients of ");
+	strcat(ftpResponse, maxProcessStr);
+	strcat(ftpResponse, " simultaneous clients allowed.\r\n");
+	send(client, ftpResponse, strlen(ftpResponse), 0);
+	doNothing(client);
+}
+
+// Función para atender una conexión SNMP.
+void attendIncomingSNMPRequest(int client) {
+	char *versionSNMP = "Version: 1\r\n";
+	char *community = "Community: public \r\n";
+	char *pdu = "PDU type: GET\r\n";
+	char *request = "Request Id: 0\r\n";
+	char *error = "Error Status: NO ERROR\r\n";
+	char *errorIndex = "Error Index: 0\r\n";
+	fprintf(stdout, "Se ha detectado una conexión SNMP.\n");
+	send(client, versionSNMP, strlen(versionSNMP), 0);
+	send(client, community, strlen(community), 0);
+	send(client, pdu, strlen(pdu), 0);
+	send(client, request, strlen(request), 0);
+	send(client, error, strlen(error), 0);
+	send(client, errorIndex, strlen(errorIndex), 0);
+	doNothing(client);
+}
+
+// Función para atender una conexión Telnet.
+void attendIncomingTelnetRequest(int client) {
+    char buff[MAXLINE] = {0};
+    fprintf(stdout, "Se ha detectado una conexión Telnet.\n");
+	char *welcomeTelnet = "Welcome to FOO Telnet Service\r\n";
+	char *loginMsg = "Login: ";
+	char *passwordMsg = "\r\nPassword: ";
+	send(client, welcomeTelnet, strlen(welcomeTelnet), 0);
+	send(client, loginMsg, strlen(loginMsg), 0);
+	get_line(client, buff, MAXLINE);
+	fprintf(stdout, "Cliente: %s.\n", buff);
+	send(client, passwordMsg, strlen(passwordMsg), 0);
+	get_line(client, buff, MAXLINE);
+	send(client, "\r\n", strlen("\r\n"), 0);
+	fprintf(stdout, "Contraseña: %s.\n", buff);
+	doNothing(client);
+}
+
+// Función para atender una conexión SMTP.
+void attendIncomingSMTPRequest(int client) {
+	char *welcomeSMTP = "220 Server SMTP\r\n";
+	fprintf(stdout, "Se ha detectado una conexión SMTP.\n");
+	send(client, welcomeSMTP, strlen(welcomeSMTP), 0);
+	doNothing(client);
+}
+
+// Función para atender una conexión DNS.
+void attendIncomingDNSRequest(int client) {
+	char *welcomeDNS = "NOT IMPLEMENTED.\r\n";
+	fprintf(stdout, "Se ha detectado una conexión DNS.\n");
+    send(client, welcomeDNS, strlen(welcomeDNS), 0);
+	doNothing(client);
+}
+
+// Función para atender una conexión SSH.
+void attendIncomingSSHRequest(int client) {
+	char *welcomeSSH = "NOT IMPLEMENTED.\r\n";
+	/*char *welcomeSSH = "The authenticity of host 'FOO Server' can't be established.\r\n";
+	char *rsa = "RSA key fingerprint is 97:4f:66:f5:96:ba:6d:b2:ef:65:35:45:18:0d:cc:29 \r\n";
+	char *continueServer = "Are you sure you want to continue connecting (yes/no)?\r\n";*/
+	fprintf(stdout, "Se ha detectado una conexión SSH.\n");
+	send(client, welcomeSSH, strlen(welcomeSSH), 0);
+	/*send(client, rsa, strlen(rsa), 0);
+	send(client, continueServer, strlen(continueServer), 0);*/
+	doNothing(client);
+}
+
 // Función "main" del servidor.
 int main(int argc, char **argv) {
 	int server_socket, client_socket;           // Socket del servidor y del cliente.
-	int port = 0;                               // Donde se almacena el puerto a utilizar.
 	struct sockaddr_in servAddr, clientAddr;    // Donde se almacenan los datos para manejar las conexiones.
 	int addr_size = sizeof(clientAddr);         // Tamaño de la estructura recién declarada.
 
-	int max_threads = 0;            // Maxima cantidad de hilos a manejar.
 	pthread_t *thread_pool;         // "Pool" de hilos.
 
 	if (argc !=  7) {               // Si la cantidad de argumentos no es la correcta se le notifica al usuario.
@@ -619,15 +722,16 @@ int main(int argc, char **argv) {
 		// Se espera una solicitud para el socket del servidor.
 		client_socket = accept(server_socket, (struct sockaddr*)&clientAddr, (socklen_t*)&addr_size);
 
-		if(client_socket < 0){      // Si la conexión del servidor resulta ser negativa se retorna un error.
+		if(client_socket < 0) {      // Si la conexión del servidor resulta ser negativa se retorna un error.
 			fprintf(stderr, "Error al conectarse.\n");
 			continue;               //Se continua con la ejecución del servidor.
 		}
+
 		fprintf(stdout, "\nConexión aceptada de %s:%d\nCliente: %d\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), client_socket);
 
         fprintf(stdout, "Cliente %d encuentra en la posición de la cola: %d\n", client_socket, queue_quantity);
         // Si todos los hilos se encuentran ocupados se le envía un mensaje al cliente para que espere.
-        if(queue_quantity > max_threads){
+        if(queue_quantity > max_threads) {
             send(client_socket, FULL_QUEUE, strlen(FULL_QUEUE), 0);
             close(client_socket);
             continue;
