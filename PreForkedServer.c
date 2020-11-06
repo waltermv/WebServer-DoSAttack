@@ -551,7 +551,7 @@ void attendIncomingDNSRequest(int client) {
 void attendIncomingSSHRequest(int client) {
 	char *welcomeSSH = "The authenticity of host 'FOO Server' can't be established.\r\n";
 	char *rsa = "RSA key fingerprint is 97:4f:66:f5:96:ba:6d:b2:ef:65:35:45:18:0d:cc:29 \r\n";
-	char *continueServer = "Are you sure you want to continue connecting (yes/no)?\r\n";*/
+	char *continueServer = "Are you sure you want to continue connecting (yes/no)?\r\n";
 	fprintf(stdout, "Se ha detectado una conexión SSH.\n");
 	send(client, welcomeSSH, strlen(welcomeSSH), 0);
 	send(client, rsa, strlen(rsa), 0);
