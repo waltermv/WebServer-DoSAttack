@@ -26,7 +26,6 @@ def execute(cmd):
 
 # Funcion principal del script, recive los argumentos disponibles en la terminal
 def main(argv):
-    print(argv)
     if len(argv) != 6:  # Se esperan un total de 6 elementos
         exit("Invalid Parameters")
     parameters = list()

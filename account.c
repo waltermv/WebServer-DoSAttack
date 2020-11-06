@@ -86,6 +86,7 @@ int main(int argc, char **argv)
     rest = login.password;
     token = strtok_r(rest, "=", &rest);
     login.password = rest;
+    //printf("~~~~~%s esto %s",login.username, login.password)
     puts("<!DOCTYPE html>");
     puts("<head>");
     puts("  <meta charset=\"utf-8\">");

@@ -73,15 +73,16 @@ def putMethod(url, fileName):
     curl = pycurl.Curl()  # Se establece la conexion utilizando curl
     length = os.stat(fileName).st_size
     curl.setopt(curl.URL, url)
-    curl.setopt(pycurl.PUT, 1)
+    curl.setopt(pycurl.UPLOAD, 1)
     curl.setopt(pycurl.INFILESIZE, length) # Se asigna el largo del contenido
-    file = open(fileName)  # Se abre el archivo a colocar
+    file = open(fileName, 'rb')  # Se abre el archivo a colocar
     curl.setopt(curl.READDATA, file) # Se agrega el archivo
     curl.setopt(pycurl.HEADERFUNCTION, buffer.write)  # Se lee el encabezado
     curl.perform()
+    file.close()  # Se cierra el archivo
     header = buffer.getvalue().splitlines()
     curl.close()  # Se cierra la conexion
-    file.close()  # Se cierra el archivo
+
     for i in header:  # Se imprimen los encabezados
         print(i.decode("utf-8"))
 

@@ -243,7 +243,6 @@ void postMethod(int client, char *url, char *host, char *parameters) {
 void deleteMethod(int client, char *url, char *host) {
     char requestBuffer[1080]; // buffer para almacenar el request
     sprintf(requestBuffer,"DELETE %s HTTP/1.1 %sHost: %s%s%s",url, CRLF, host, CRLF, CRLF);
-    printf("%s\n", requestBuffer);
     send(client, requestBuffer, strlen(requestBuffer), 0); // se enviar la consulta al cliente
     readResponse(client); // se lee los encabezados del response
 }
@@ -258,7 +257,6 @@ void sendFile(FILE *file, int client){
     char bufferRequest[BUFFER_LEN];
     memset(bufferRequest, 0x00, BUFFER_LEN);
     while(fgets(bufferRequest, BUFFER_LEN, file) != NULL) {
-        printf("%s", bufferRequest);
         if (send(client, bufferRequest, sizeof(bufferRequest), 0) != -1) { // Se lee los valores del archivo y se envian hasta obtener un valor -1
             perror("[Error in sending file]"); // En tal caso se informa el error
             exit(1); // Se termina la ejecucion
@@ -299,7 +297,6 @@ void putMethod(int client, char *url, char *host, char *fileName){
     }
     char requestBuffer[1080]; // buffer para almacenar el request
     sprintf(requestBuffer,"PUT %s HTTP/1.1 %sHost: %s%sContent-Length: %ld%s%s",url, CRLF, host, CRLF, size + 1, CRLF, CRLF);
-    printf(requestBuffer,"PUT %s HTTP/1.1 %sHost: %s%sContent-Length: %ld%s%s",url, CRLF, host, CRLF, size + 1, CRLF, CRLF);
     send(client, requestBuffer, strlen(requestBuffer), 0); // se enviar la consulta al cliente
     sendFile(file, client);
     if (fclose(file)!=0) perror("[The file could not be closed]");
